@@ -154,6 +154,23 @@ impl Tx {
             amount: Some(amount),
         }
     }
+
+    /// Creates a new incoming withdrawal transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use toy_payments_engine::*;
+    /// assert_eq!(Tx::withdrawal(1, 1000, rust_decimal_macros::dec!(1)).kind, TxKind::Withdrawal);
+    /// ```
+    pub fn withdrawal(cid: Cid, txid: Txid, amount: Decimal) -> Self {
+        Self {
+            kind: TxKind::Withdrawal,
+            cid,
+            txid,
+            amount: Some(amount),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -211,21 +228,82 @@ pub fn write_transactions<W: io::Write>(txs: &Txs, wtr: W) -> Result<(), Box<dyn
 
 #[cfg(test)]
 mod tests {
+    use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
-    use crate::{Error, Tx, Txs};
+    use crate::{Cid, Error, Tx, Txid, Txs};
 
-    #[test]
-    fn deposit() {
-        let mut txs = Txs::new();
-        txs.process_tx(Tx::deposit(1, 1001, dec!(15))).unwrap();
-        txs.process_tx(Tx::deposit(1, 1002, dec!(25))).unwrap();
+    impl Txs {
+        /// Helper method that processes a `deposit` transaction.
+        fn deposit_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
+            self.process_tx(Tx::deposit(cid, txid, amount))
+        }
 
-        assert_eq!(txs.get(1).unwrap().available, dec!(40));
+        /// Helper method that processes a `withdrawal` transaction.
+        fn withdrawal_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
+            self.process_tx(Tx::withdrawal(cid, txid, amount))
+        }
     }
 
     #[test]
-    fn deposit_same_tx() {
+    fn test_deposit() {
+        let mut txs = Txs::new();
+        txs.deposit_tx(1, 1001, dec!(15.005)).unwrap();
+        txs.deposit_tx(1, 1002, dec!(24.996)).unwrap();
+
+        txs.deposit_tx(2, 1003, dec!(30)).unwrap();
+
+        txs.deposit_tx(3, 1004, dec!(5)).unwrap();
+
+        txs.deposit_tx(1, 1005, dec!(5.2)).unwrap();
+
+        assert_eq!(txs.get(1).unwrap().available, dec!(45.201));
+        assert_eq!(txs.get(2).unwrap().available, dec!(30));
+        assert_eq!(txs.get(3).unwrap().available, dec!(5));
+    }
+
+    #[test]
+    fn test_deposit_overflow() {
+        let mut txs = Txs::new();
+        txs.deposit_tx(1, 1001, Decimal::MAX).unwrap();
+
+        assert_eq!(
+            txs.deposit_tx(1, 1002, dec!(1)).unwrap_err(),
+            Error::MathError
+        );
+    }
+
+    #[test]
+    fn test_withdrawal() {
+        let mut txs = Txs::new();
+        txs.deposit_tx(1, 1001, dec!(15.005)).unwrap();
+        txs.deposit_tx(1, 1002, dec!(24.996)).unwrap();
+
+        txs.deposit_tx(2, 1003, dec!(10)).unwrap();
+
+        assert_eq!(txs.get(1).unwrap().available, dec!(40.001));
+        assert_eq!(txs.get(2).unwrap().available, dec!(10));
+
+        txs.withdrawal_tx(1, 1004, dec!(10.002)).unwrap();
+        txs.withdrawal_tx(2, 1005, dec!(10)).unwrap();
+
+        assert_eq!(txs.get(1).unwrap().available, dec!(29.999));
+        assert_eq!(txs.get(2).unwrap().available, dec!(0));
+    }
+
+    #[test]
+    fn test_withdrawal_underflow() {
+        let mut txs = Txs::new();
+        txs.withdrawal_tx(1, 1001, Decimal::MAX).unwrap();
+
+        assert_eq!(
+            txs.withdrawal_tx(1, 1002, dec!(1)).unwrap_err(),
+            Error::MathError
+        );
+    }
+
+    #[test]
+    fn test_deposit_same_tx() {
         let mut txs = Txs::new();
         txs.process_tx(Tx::deposit(1, 1001, dec!(10))).unwrap();
 
