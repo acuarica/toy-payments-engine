@@ -13,7 +13,7 @@ type Txid = u32;
 
 type Cid = u16;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
     MathError,
     TxAlreadyExists,
@@ -207,4 +207,35 @@ pub fn write_transactions<W: io::Write>(txs: &Txs, wtr: W) -> Result<(), Box<dyn
 
     writer.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rust_decimal_macros::dec;
+
+    use crate::{Error, Tx, Txs};
+
+    #[test]
+    fn deposit() {
+        let mut txs = Txs::new();
+        txs.process_tx(Tx::deposit(1, 1001, dec!(15))).unwrap();
+        txs.process_tx(Tx::deposit(1, 1002, dec!(25))).unwrap();
+
+        assert_eq!(txs.get(1).unwrap().available, dec!(40));
+    }
+
+    #[test]
+    fn deposit_same_tx() {
+        let mut txs = Txs::new();
+        txs.process_tx(Tx::deposit(1, 1001, dec!(10))).unwrap();
+
+        assert_eq!(
+            txs.process_tx(Tx::deposit(1, 1001, dec!(10))).unwrap_err(),
+            Error::TxAlreadyExists
+        );
+        assert_eq!(
+            txs.process_tx(Tx::deposit(2, 1001, dec!(10))).unwrap_err(),
+            Error::TxAlreadyExists
+        );
+    }
 }
