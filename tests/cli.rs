@@ -40,5 +40,5 @@ fn test_path_exist() {
         .arg("./input-example.csv")
         .assert()
         .success()
-        .stdout(predicate::str::contains(""));
+        .stdout(predicate::str::contains("client,available,held,total,locked"));
 }

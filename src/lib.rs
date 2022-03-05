@@ -1,6 +1,6 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    error,
+    error, io,
     path::Path,
 };
 
@@ -172,21 +172,39 @@ impl Account {
         }
     }
 }
+
 ///
 ///
-pub fn parse_transactions<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn error::Error>> {
-    // Build the CSV reader and iterate over each record.
+pub fn parse_transactions<P: AsRef<Path>>(path: P) -> Result<Txs, Box<dyn error::Error>> {
     let mut reader = ReaderBuilder::new()
         .trim(Trim::All)
         .flexible(true)
         .from_path(path)?;
     let mut txs = Txs::new();
     for result in reader.deserialize() {
-        // The iterator yields Result<StringRecord, Error>, so we check the
-        // error here.
         let tx: Tx = result?;
         txs.process_tx(tx).unwrap();
     }
-    println!("{:?}", txs);
+
+    Ok(txs)
+}
+
+pub fn write_transactions<W: io::Write>(txs: &Txs, wtr: W) -> Result<(), Box<dyn error::Error>> {
+    let mut writer = csv::Writer::from_writer(wtr);
+
+    writer.write_record(&["client", "available", "held", "total", "locked"])?;
+
+    for (cid, account) in &txs.accounts {
+        let total = account.available + account.held;
+        writer.write_record(&[
+            cid.to_string(),
+            account.available.to_string(),
+            account.held.to_string(),
+            total.to_string(),
+            account.locked.to_string(),
+        ])?;
+    }
+
+    writer.flush()?;
     Ok(())
 }
