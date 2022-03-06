@@ -1,10 +1,12 @@
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    error, io,
-    path::Path,
-};
+//! The `toy-payments-engine` crate is used to process multiple transactions
+//! from a CSV buffer, _e.g._, a file or a string.
 
-use csv::{ReaderBuilder, Trim};
+#![warn(missing_docs)]
+
+pub mod csv;
+
+use std::collections::{hash_map::Entry, HashMap};
+
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::Deserialize;
@@ -14,12 +16,17 @@ type Txid = u32;
 type Cid = u16;
 
 #[derive(Debug, PartialEq)]
+/// Represents the kind of errors returned by `Txs::process_tx`.
 pub enum Error {
+    /// When an overflow or underflow error happens.
     MathError,
+    /// When the transaction ID was already processed.
     TxAlreadyExists,
+    /// Then transaction is not well formed.
     InvalidTx,
 }
 
+/// Represents a collection of incoming transactions to be processed.
 #[derive(Debug)]
 pub struct Txs {
     txs: HashMap<Txid, Tx>,
@@ -44,7 +51,7 @@ impl Txs {
         }
     }
 
-    ///
+    /// Returns an account if exists, otherwise `None`.
     pub fn get(&self, cid: Cid) -> Option<&Account> {
         self.accounts.get(&cid)
     }
@@ -94,6 +101,16 @@ impl Txs {
         }
     }
 
+    /// Processes an incoming `deposit` transaction.
+    pub fn deposit_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
+        self.process_tx(Tx::deposit(cid, txid, amount))
+    }
+
+    /// Processes an incoming `withdrawal` transaction.
+    pub fn withdrawal_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
+        self.process_tx(Tx::withdrawal(cid, txid, amount))
+    }
+
     fn process_operation<F: FnOnce(Decimal, Decimal) -> Option<Decimal>>(
         txs: &mut HashMap<Txid, Tx>,
         tx: Tx,
@@ -117,17 +134,24 @@ impl Txs {
 
 #[derive(Debug, PartialEq, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
+/// Represents the kind of transactions that can be processed.
 pub enum TxKind {
+    /// A client's deposit into an account.
     Deposit,
+    /// A client's withdrawal into an account.
     Withdrawal,
+    /// A dispute represents a client's claim that a transaction was erroneous and should be reversed.
     Dispute,
+    /// A resolve represents a resolution to a dispute, releasing the associated held funds.
     Resolve,
+    /// A chargeback is the final state of a dispute and represents the client reversing a transaction.
     ChargeBack,
 }
 
 /// Represents an incoming transaction.
 #[derive(Debug, Deserialize)]
 pub struct Tx {
+    /// The transaction kind of this `tx`.
     #[serde(rename = "type")]
     pub kind: TxKind,
     #[serde(rename = "client")]
@@ -173,10 +197,15 @@ impl Tx {
     }
 }
 
+/// Represents the state of a given client's account.
 #[derive(Debug)]
 pub struct Account {
+    /// The funds that are available for trading, staking, withdrawal, _etc_.
     pub available: Decimal,
+    /// The fund that are held for dispute.
     held: Decimal,
+    /// Wheater the account is locked.
+    /// An account is locked if a charge back occurs.
     locked: bool,
 }
 
@@ -190,60 +219,12 @@ impl Account {
     }
 }
 
-///
-///
-pub fn parse_transactions<P: AsRef<Path>>(path: P) -> Result<Txs, Box<dyn error::Error>> {
-    let mut reader = ReaderBuilder::new()
-        .trim(Trim::All)
-        .flexible(true)
-        .from_path(path)?;
-    let mut txs = Txs::new();
-    for result in reader.deserialize() {
-        let tx: Tx = result?;
-        txs.process_tx(tx).unwrap();
-    }
-
-    Ok(txs)
-}
-
-pub fn write_transactions<W: io::Write>(txs: &Txs, wtr: W) -> Result<(), Box<dyn error::Error>> {
-    let mut writer = csv::Writer::from_writer(wtr);
-
-    writer.write_record(&["client", "available", "held", "total", "locked"])?;
-
-    for (cid, account) in &txs.accounts {
-        let total = account.available + account.held;
-        writer.write_record(&[
-            cid.to_string(),
-            account.available.to_string(),
-            account.held.to_string(),
-            total.to_string(),
-            account.locked.to_string(),
-        ])?;
-    }
-
-    writer.flush()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
-    use crate::{Cid, Error, Tx, Txid, Txs};
-
-    impl Txs {
-        /// Helper method that processes a `deposit` transaction.
-        fn deposit_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
-            self.process_tx(Tx::deposit(cid, txid, amount))
-        }
-
-        /// Helper method that processes a `withdrawal` transaction.
-        fn withdrawal_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
-            self.process_tx(Tx::withdrawal(cid, txid, amount))
-        }
-    }
+    use crate::{Error, Tx, Txs};
 
     #[test]
     fn test_deposit() {

@@ -1,6 +1,6 @@
 use std::{env, error::Error, io, process};
 
-use toy_payments_engine::{parse_transactions, write_transactions};
+use toy_payments_engine::{csv::parse_transactions, csv::write_transactions};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
