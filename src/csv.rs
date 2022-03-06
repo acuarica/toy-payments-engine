@@ -67,8 +67,8 @@ pub fn process_transactions<R: io::Read>(rdr: R) -> Result<Txs, Box<dyn error::E
 /// let mut txs = Txs::new();
 /// let mut buf = vec![];
 ///
-/// txs.deposit_tx(1, 1001, dec!(10.05)).unwrap();
-/// txs.withdrawal_tx(1, 1002, dec!(1)).unwrap();
+/// txs.deposit(1, 1001, dec!(10.05)).unwrap();
+/// txs.withdrawal(1, 1002, dec!(1)).unwrap();
 ///
 /// write_transactions(&txs, BufWriter::new(&mut buf)).unwrap();
 ///

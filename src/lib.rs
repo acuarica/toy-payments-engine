@@ -196,13 +196,48 @@ impl Txs {
         self.accounts.get(&cid)
     }
 
-    /// Processes an incoming deposit transaction.
-    pub fn deposit_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
+    /// Processes an incoming `Deposit` transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = toy_payments_engine::Txs::new();
+    /// txs.deposit(1, 1001, dec!(15.005)).unwrap();
+    /// txs.deposit(1, 1002, dec!(24.996)).unwrap();
+    ///
+    /// txs.deposit(2, 1003, dec!(30)).unwrap();
+    ///
+    /// txs.deposit(3, 1004, dec!(5)).unwrap();
+    ///
+    /// txs.deposit(1, 1005, dec!(5.2)).unwrap();
+    ///
+    /// assert_eq!(txs.get(1).unwrap().available, dec!(45.201));
+    /// assert_eq!(txs.get(2).unwrap().available, dec!(30));
+    /// assert_eq!(txs.get(3).unwrap().available, dec!(5));
+    /// ```
+    ///
+    /// The transaction processing fails when the `available`
+    /// amount in the account overflows.
+    ///
+    ///
+    /// ```
+    /// use toy_payments_engine::*;
+    /// use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    /// txs.deposit(1, 1001, rust_decimal::Decimal::MAX).unwrap();
+    ///
+    /// assert_eq!(txs.deposit(1, 1002, dec!(1)).unwrap_err(), Error::MathError);
+    /// ```
+    ///
+    pub fn deposit(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
         self.process_tx(Tx::deposit(cid, txid, amount))
     }
 
     /// Processes an incoming withdrawal transaction.
-    pub fn withdrawal_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
+    pub fn withdrawal(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
         self.process_tx(Tx::withdrawal(cid, txid, amount))
     }
 
@@ -329,46 +364,18 @@ mod tests {
     use crate::{Account, Error, Tx, Txs};
 
     #[test]
-    fn test_deposit() {
-        let mut txs = Txs::new();
-        txs.deposit_tx(1, 1001, dec!(15.005)).unwrap();
-        txs.deposit_tx(1, 1002, dec!(24.996)).unwrap();
-
-        txs.deposit_tx(2, 1003, dec!(30)).unwrap();
-
-        txs.deposit_tx(3, 1004, dec!(5)).unwrap();
-
-        txs.deposit_tx(1, 1005, dec!(5.2)).unwrap();
-
-        assert_eq!(txs.get(1).unwrap().available, dec!(45.201));
-        assert_eq!(txs.get(2).unwrap().available, dec!(30));
-        assert_eq!(txs.get(3).unwrap().available, dec!(5));
-    }
-
-    #[test]
-    fn test_deposit_overflow() {
-        let mut txs = Txs::new();
-        txs.deposit_tx(1, 1001, Decimal::MAX).unwrap();
-
-        assert_eq!(
-            txs.deposit_tx(1, 1002, dec!(1)).unwrap_err(),
-            Error::MathError
-        );
-    }
-
-    #[test]
     fn test_withdrawal() {
         let mut txs = Txs::new();
-        txs.deposit_tx(1, 1001, dec!(15.005)).unwrap();
-        txs.deposit_tx(1, 1002, dec!(24.996)).unwrap();
+        txs.deposit(1, 1001, dec!(15.005)).unwrap();
+        txs.deposit(1, 1002, dec!(24.996)).unwrap();
 
-        txs.deposit_tx(2, 1003, dec!(10)).unwrap();
+        txs.deposit(2, 1003, dec!(10)).unwrap();
 
         assert_eq!(txs.get(1).unwrap().available, dec!(40.001));
         assert_eq!(txs.get(2).unwrap().available, dec!(10));
 
-        txs.withdrawal_tx(1, 1004, dec!(10.002)).unwrap();
-        txs.withdrawal_tx(2, 1005, dec!(10)).unwrap();
+        txs.withdrawal(1, 1004, dec!(10.002)).unwrap();
+        txs.withdrawal(2, 1005, dec!(10)).unwrap();
 
         assert_eq!(txs.get(1).unwrap().available, dec!(29.999));
         assert_eq!(txs.get(2).unwrap().available, dec!(0));
@@ -378,7 +385,7 @@ mod tests {
     fn test_withdrawal_insuffient_funds() {
         let mut txs = Txs::new();
         assert_eq!(
-            txs.withdrawal_tx(1, 1002, dec!(1)).unwrap_err(),
+            txs.withdrawal(1, 1002, dec!(1)).unwrap_err(),
             Error::InsuffienctFunds
         );
     }
@@ -401,8 +408,8 @@ mod tests {
     #[test]
     fn test_dispute() {
         let mut txs = Txs::new();
-        txs.deposit_tx(1, 1001, dec!(20)).unwrap();
-        txs.deposit_tx(1, 1002, dec!(10)).unwrap();
+        txs.deposit(1, 1001, dec!(20)).unwrap();
+        txs.deposit(1, 1002, dec!(10)).unwrap();
         txs.dispute(1, 1001).unwrap();
 
         assert_eq!(
@@ -422,7 +429,7 @@ mod tests {
     #[test]
     fn test_cid_mismatch() {
         let mut txs = Txs::new();
-        txs.deposit_tx(1, 1001, dec!(10)).unwrap();
+        txs.deposit(1, 1001, dec!(10)).unwrap();
 
         assert_eq!(txs.dispute(2, 1001).unwrap_err(), Error::CidMismatch);
         assert_eq!(txs.resolve(2, 1001).unwrap_err(), Error::CidMismatch);
@@ -432,8 +439,8 @@ mod tests {
     #[test]
     fn test_double_dispute() {
         let mut txs = Txs::new();
-        txs.deposit_tx(1, 1001, dec!(20)).unwrap();
-        txs.deposit_tx(1, 1002, dec!(10)).unwrap();
+        txs.deposit(1, 1001, dec!(20)).unwrap();
+        txs.deposit(1, 1002, dec!(10)).unwrap();
         txs.dispute(1, 1001).unwrap();
         assert_eq!(txs.dispute(1, 1001).unwrap_err(), Error::TxAlreadyDisputed);
 
@@ -446,7 +453,7 @@ mod tests {
     #[test]
     fn test_tx_not_disputed() {
         let mut txs = Txs::new();
-        txs.deposit_tx(1, 1001, dec!(20)).unwrap();
+        txs.deposit(1, 1001, dec!(20)).unwrap();
         assert_eq!(txs.resolve(1, 1001).unwrap_err(), Error::TxNotDisputed);
         assert_eq!(txs.charge_back(1, 1001).unwrap_err(), Error::TxNotDisputed);
     }
@@ -454,12 +461,9 @@ mod tests {
     #[test]
     fn test_total_overflow_when_deposit() {
         let mut txs = Txs::new();
-        txs.deposit_tx(1, 1001, Decimal::MAX).unwrap();
+        txs.deposit(1, 1001, Decimal::MAX).unwrap();
         txs.dispute(1, 1001).unwrap();
 
-        assert_eq!(
-            txs.deposit_tx(1, 1002, dec!(1)).unwrap_err(),
-            Error::MathError
-        );
+        assert_eq!(txs.deposit(1, 1002, dec!(1)).unwrap_err(), Error::MathError);
     }
 }
