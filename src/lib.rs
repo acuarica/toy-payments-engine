@@ -15,6 +15,89 @@ type Txid = u32;
 
 type Cid = u16;
 
+/// Represents an incoming transaction.
+#[derive(Debug, Deserialize)]
+pub struct Tx {
+    /// The transaction kind of this `tx`.
+    #[serde(rename = "type")]
+    pub kind: TxKind,
+    #[serde(rename = "client")]
+    cid: Cid,
+    #[serde(rename = "tx")]
+    txid: Txid,
+    amount: Option<Decimal>,
+}
+
+impl Tx {
+    /// Creates a new incoming deposit transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use toy_payments_engine::*;
+    /// assert_eq!(Tx::deposit(1, 1000, rust_decimal_macros::dec!(1)).kind, TxKind::Deposit);
+    /// ```
+    pub fn deposit(cid: Cid, txid: Txid, amount: Decimal) -> Self {
+        Self {
+            kind: TxKind::Deposit,
+            cid,
+            txid,
+            amount: Some(amount),
+        }
+    }
+
+    /// Creates a new incoming withdrawal transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use toy_payments_engine::*;
+    /// assert_eq!(Tx::withdrawal(1, 1000, rust_decimal_macros::dec!(1)).kind, TxKind::Withdrawal);
+    /// ```
+    pub fn withdrawal(cid: Cid, txid: Txid, amount: Decimal) -> Self {
+        Self {
+            kind: TxKind::Withdrawal,
+            cid,
+            txid,
+            amount: Some(amount),
+        }
+    }
+
+    /// Creates a new incoming dispute transaction.
+    /// Please note that this type of transaction does not take an amount.
+    /// The amount is taken from the corresponding `txid`.
+    pub fn dispute(cid: Cid, txid: Txid) -> Self {
+        Self {
+            kind: TxKind::Dispute,
+            cid,
+            txid,
+            amount: None,
+        }
+    }
+}
+
+/// Represents the state of a given client's account.
+#[derive(Debug)]
+pub struct Account {
+    /// The funds that are available for trading, staking, withdrawal, _etc_.
+    pub available: Decimal,
+    /// The fund that are held for dispute.
+    held: Decimal,
+    /// Wheater the account is locked.
+    /// An account is locked if a charge back occurs.
+    locked: bool,
+}
+
+impl Account {
+    fn new() -> Self {
+        Self {
+            available: dec!(0),
+            held: dec!(0),
+            locked: false,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 /// Represents the kind of errors returned by `Txs::process_tx`.
 pub enum Error {
@@ -157,89 +240,6 @@ pub enum TxKind {
     Resolve,
     /// A chargeback is the final state of a dispute and represents the client reversing a transaction.
     ChargeBack,
-}
-
-/// Represents an incoming transaction.
-#[derive(Debug, Deserialize)]
-pub struct Tx {
-    /// The transaction kind of this `tx`.
-    #[serde(rename = "type")]
-    pub kind: TxKind,
-    #[serde(rename = "client")]
-    cid: Cid,
-    #[serde(rename = "tx")]
-    txid: Txid,
-    amount: Option<Decimal>,
-}
-
-impl Tx {
-    /// Creates a new incoming deposit transaction.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use toy_payments_engine::*;
-    /// assert_eq!(Tx::deposit(1, 1000, rust_decimal_macros::dec!(1)).kind, TxKind::Deposit);
-    /// ```
-    pub fn deposit(cid: Cid, txid: Txid, amount: Decimal) -> Self {
-        Self {
-            kind: TxKind::Deposit,
-            cid,
-            txid,
-            amount: Some(amount),
-        }
-    }
-
-    /// Creates a new incoming withdrawal transaction.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use toy_payments_engine::*;
-    /// assert_eq!(Tx::withdrawal(1, 1000, rust_decimal_macros::dec!(1)).kind, TxKind::Withdrawal);
-    /// ```
-    pub fn withdrawal(cid: Cid, txid: Txid, amount: Decimal) -> Self {
-        Self {
-            kind: TxKind::Withdrawal,
-            cid,
-            txid,
-            amount: Some(amount),
-        }
-    }
-
-    /// Creates a new incoming dispute transaction.
-    /// Please note that this type of transaction does not take an amount.
-    /// The amount is taken from the corresponding `txid`.
-    pub fn dispute(cid: Cid, txid: Txid) -> Self {
-        Self {
-            kind: TxKind::Dispute,
-            cid,
-            txid,
-            amount: None,
-        }
-    }
-}
-
-/// Represents the state of a given client's account.
-#[derive(Debug)]
-pub struct Account {
-    /// The funds that are available for trading, staking, withdrawal, _etc_.
-    pub available: Decimal,
-    /// The fund that are held for dispute.
-    held: Decimal,
-    /// Wheater the account is locked.
-    /// An account is locked if a charge back occurs.
-    locked: bool,
-}
-
-impl Account {
-    fn new() -> Self {
-        Self {
-            available: dec!(0),
-            held: dec!(0),
-            locked: false,
-        }
-    }
 }
 
 #[cfg(test)]
