@@ -164,6 +164,8 @@ pub enum Error {
     TxNotDisputed,
     /// Occurs when a withdrawal TX is being disputed.
     TxMustBeDeposit,
+    /// Occurs when the account is currently locked because of a previous charge back.
+    AccountIsLocked,
     /// When transaction is not well formed.
     InvalidTx,
 }
@@ -403,6 +405,14 @@ impl Txs {
     /// assert_eq!(txs.get(1).unwrap().available, dec!(10) );
     /// ```
     pub fn process_tx(&mut self, tx: Tx) -> Result<(), Error> {
+        if self
+            .accounts
+            .get(&tx.cid)
+            .map_or(false, |account| account.locked)
+        {
+            return Err(Error::AccountIsLocked);
+        }
+
         match (tx.kind, tx.amount) {
             (TxKind::Deposit, Some(amount)) => {
                 self.process_operation(tx, amount, Decimal::checked_add)
@@ -534,5 +544,22 @@ mod tests {
         txs.dispute(1, 1001).unwrap();
 
         assert_eq!(txs.deposit(1, 1002, dec!(1)), Err(Error::MathError));
+    }
+
+    #[test]
+    fn test_account_locked() {
+        let mut txs = Txs::new();
+        txs.deposit(1, 1001, dec!(10)).unwrap();
+        txs.dispute(1, 1001).unwrap();
+        txs.charge_back(1, 1001).unwrap();
+
+        assert_eq!(txs.deposit(1, 1002, dec!(5)), Err(Error::AccountIsLocked));
+        assert_eq!(
+            txs.withdrawal(1, 1002, dec!(5)),
+            Err(Error::AccountIsLocked)
+        );
+        assert_eq!(txs.dispute(1, 1001), Err(Error::AccountIsLocked));
+        assert_eq!(txs.resolve(1, 1001), Err(Error::AccountIsLocked));
+        assert_eq!(txs.charge_back(1, 1001), Err(Error::AccountIsLocked));
     }
 }
