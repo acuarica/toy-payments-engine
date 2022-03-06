@@ -150,6 +150,8 @@ impl Account {
 pub enum Error {
     /// Occurs when an overflow or underflow error happens.
     MathError,
+    /// Insufficient available funds for this operation.
+    InsuffienctFunds,
     /// Occurs when the transaction ID was already processed.
     TxAlreadyExists,
     /// Occurs when the transaction ID was not found.
@@ -232,13 +234,12 @@ impl Txs {
     /// assert_eq!(txs.get(1).unwrap().available, dec!(10) );
     /// ```
     pub fn process_tx(&mut self, tx: Tx) -> Result<(), Error> {
-        let account = self.accounts.entry(tx.cid).or_default();
         match (tx.kind, tx.amount) {
             (TxKind::Deposit, Some(amount)) => {
-                Txs::process_operation(&mut self.txs, tx, account, amount, Decimal::checked_add)
+                self.process_operation(tx, amount, Decimal::checked_add)
             }
             (TxKind::Withdrawal, Some(amount)) => {
-                Txs::process_operation(&mut self.txs, tx, account, amount, Decimal::checked_sub)
+                self.process_operation(tx, amount, Decimal::checked_sub)
             }
             (TxKind::Dispute, None) => self.with_tx(tx, |ref_tx, account| {
                 if !ref_tx.disputed {
@@ -274,6 +275,33 @@ impl Txs {
         }
     }
 
+    fn process_operation<F: FnOnce(Decimal, Decimal) -> Option<Decimal>>(
+        &mut self,
+        tx: Tx,
+        amount: Decimal,
+        checked_op: F,
+    ) -> Result<(), Error> {
+        let account = self.accounts.entry(tx.cid).or_default();
+
+        if let Some(new_available) = checked_op(account.available, amount) {
+            if new_available < Decimal::ZERO {
+                Err(Error::InsuffienctFunds)
+            } else if let Entry::Vacant(entry) = self.txs.entry(tx.txid) {
+                if let Some(_) = Decimal::checked_add(new_available, account.held) {
+                    entry.insert(tx);
+                    account.available = new_available;
+                    Ok(())
+                } else {
+                    Err(Error::MathError)
+                }
+            } else {
+                Err(Error::TxAlreadyExists)
+            }
+        } else {
+            Err(Error::MathError)
+        }
+    }
+
     fn with_tx<F: FnOnce(&mut Tx, &mut Account) -> Result<(), Error>>(
         &mut self,
         tx: Tx,
@@ -290,30 +318,6 @@ impl Txs {
                     Err(Error::CidMismatch)
                 }
             })
-    }
-
-    fn process_operation<F: FnOnce(Decimal, Decimal) -> Option<Decimal>>(
-        txs: &mut HashMap<Txid, Tx>,
-        tx: Tx,
-        account: &mut Account,
-        amount: Decimal,
-        operation: F,
-    ) -> Result<(), Error> {
-        if let Some(new_available) = operation(account.available, amount) {
-            if let Entry::Vacant(entry) = txs.entry(tx.txid) {
-                if let Some(_) = Decimal::checked_add(new_available, account.held) {
-                    entry.insert(tx);
-                    account.available = new_available;
-                    Ok(())
-                } else {
-                    Err(Error::MathError)
-                }
-            } else {
-                Err(Error::TxAlreadyExists)
-            }
-        } else {
-            Err(Error::MathError)
-        }
     }
 }
 
@@ -371,13 +375,11 @@ mod tests {
     }
 
     #[test]
-    fn test_withdrawal_underflow() {
+    fn test_withdrawal_insuffient_funds() {
         let mut txs = Txs::new();
-        txs.withdrawal_tx(1, 1001, Decimal::MAX).unwrap();
-
         assert_eq!(
             txs.withdrawal_tx(1, 1002, dec!(1)).unwrap_err(),
-            Error::MathError
+            Error::InsuffienctFunds
         );
     }
 
