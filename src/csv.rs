@@ -41,9 +41,8 @@ pub fn process_transactions<R: io::Read>(rdr: R) -> Result<Txs, Box<dyn error::E
     let mut lineno = 1;
     for result in reader.deserialize() {
         let tx: Tx = result?;
-        match txs.process_tx(tx) {
-            Err(err) => warn!("Warning in line {}: {:?}", lineno, err),
-            _ => {}
+        if let Err(err) = txs.process_tx(tx) {
+            warn!("Warning in line {}: {:?}", lineno, err);
         }
         lineno += 1;
     }
