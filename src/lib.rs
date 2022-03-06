@@ -128,10 +128,10 @@ pub struct Account {
     /// The funds that are available for trading, staking, withdrawal, _etc_.
     pub available: Decimal,
     /// The fund that are held for dispute.
-    held: Decimal,
+    pub held: Decimal,
     /// Wheater the account is locked.
     /// An account is locked if a charge back occurs.
-    locked: bool,
+    pub locked: bool,
 }
 
 impl Account {
@@ -162,6 +162,8 @@ pub enum Error {
     TxAlreadyDisputed,
     /// Occurs when a TX is not being disputed.
     TxNotDisputed,
+    /// Occurs when a withdrawal TX is being disputed.
+    TxMustBeDeposit,
     /// When transaction is not well formed.
     InvalidTx,
 }
@@ -171,6 +173,12 @@ pub enum Error {
 pub struct Txs {
     txs: HashMap<Txid, Tx>,
     accounts: HashMap<Cid, Account>,
+}
+
+impl Default for Txs {
+    fn default() -> Self {
+        Txs::new()
+    }
 }
 
 impl Txs {
@@ -201,9 +209,10 @@ impl Txs {
     /// # Examples
     ///
     /// ```
+    /// use toy_payments_engine::*;
     /// use rust_decimal_macros::dec;
     ///
-    /// let mut txs = toy_payments_engine::Txs::new();
+    /// let mut txs = Txs::new();
     /// txs.deposit(1, 1001, dec!(15.005)).unwrap();
     /// txs.deposit(1, 1002, dec!(24.996)).unwrap();
     ///
@@ -218,9 +227,21 @@ impl Txs {
     /// assert_eq!(txs.get(3).unwrap().available, dec!(5));
     /// ```
     ///
-    /// The transaction processing fails when the `available`
-    /// amount in the account overflows.
+    /// The same transaction id cannot be used twice,
+    /// even if the client ID if different.
     ///
+    /// ```
+    /// use toy_payments_engine::*;
+    /// use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    /// txs.deposit(1, 1001, dec!(10)).unwrap();
+    ///
+    /// assert_eq!(txs.deposit(1, 1001, dec!(15)), Err(Error::TxAlreadyExists));
+    /// assert_eq!(txs.deposit(2, 1001, dec!(15)), Err(Error::TxAlreadyExists));
+    /// ```
+    ///
+    /// The transaction processing fails when the `available` amount in the account overflows.
     ///
     /// ```
     /// use toy_payments_engine::*;
@@ -229,29 +250,141 @@ impl Txs {
     /// let mut txs = Txs::new();
     /// txs.deposit(1, 1001, rust_decimal::Decimal::MAX).unwrap();
     ///
-    /// assert_eq!(txs.deposit(1, 1002, dec!(1)).unwrap_err(), Error::MathError);
+    /// assert_eq!(txs.deposit(1, 1002, dec!(1)), Err(Error::MathError));
     /// ```
-    ///
     pub fn deposit(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
         self.process_tx(Tx::deposit(cid, txid, amount))
     }
 
-    /// Processes an incoming withdrawal transaction.
+    /// Processes an incoming `Withdrawal` transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use toy_payments_engine::*;
+    /// use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    /// txs.deposit(1, 1001, dec!(15.005)).unwrap();
+    /// txs.deposit(1, 1002, dec!(24.996)).unwrap();
+    ///
+    /// txs.deposit(2, 1003, dec!(10)).unwrap();
+    ///
+    /// assert_eq!(txs.get(1).unwrap().available, dec!(40.001));
+    /// assert_eq!(txs.get(2).unwrap().available, dec!(10));
+    ///
+    /// txs.withdrawal(1, 1004, dec!(10.002)).unwrap();
+    /// txs.withdrawal(2, 1005, dec!(10)).unwrap();
+    ///
+    /// assert_eq!(txs.get(1).unwrap().available, dec!(29.999));
+    /// assert_eq!(txs.get(2).unwrap().available, dec!(0));
+    /// ```
+    ///
+    /// The processing fails when funds are not sufficient for withdrawal.
+    ///
+    /// ```
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    ///
+    /// assert_eq!( txs.withdrawal(1, 1001, dec!(1)), Err(Error::InsuffienctFunds) );
+    /// ```
     pub fn withdrawal(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
         self.process_tx(Tx::withdrawal(cid, txid, amount))
     }
 
-    /// Processes an incoming dispute transaction.
+    /// Processes an incoming `Dispute` transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    ///
+    /// txs.deposit(1, 1001, dec!(20)).unwrap();
+    /// txs.deposit(1, 1002, dec!(10)).unwrap();
+    /// txs.dispute(1, 1001).unwrap();
+    ///
+    /// assert_eq!(txs.get(1), Some(&Account::new(dec!(10), dec!(20), false)));
+    /// ```
+    ///
+    /// A second `dispute` on the same TX id will be rejected.
+    /// The state of the previous dispute is preserved.
+    ///
+    /// ```
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    ///
+    /// txs.deposit(1, 1001, dec!(20)).unwrap();
+    /// txs.deposit(1, 1002, dec!(10)).unwrap();
+    /// txs.dispute(1, 1001).unwrap();
+    ///
+    /// assert_eq!(txs.dispute(1, 1001), Err(Error::TxAlreadyDisputed));
+    ///
+    /// assert_eq!(txs.get(1), Some(&Account::new(dec!(10), dec!(20), false)));
+    /// ```
+    ///
+    /// ```
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    ///
+    /// txs.deposit(1, 1001, dec!(30)).unwrap();
+    /// txs.withdrawal(1, 1002, dec!(10)).unwrap();
+    /// assert_eq!(txs.dispute(1, 1002), Err(Error::TxMustBeDeposit));
+    /// ```
     pub fn dispute(&mut self, cid: Cid, txid: Txid) -> Result<(), Error> {
         self.process_tx(Tx::dispute(cid, txid))
     }
 
-    /// Processes an incoming resolve transaction.
+    /// Processes an incoming `Resolve` transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    ///
+    /// txs.deposit(1, 1001, dec!(20)).unwrap();
+    /// txs.deposit(1, 1002, dec!(10)).unwrap();
+    ///
+    /// txs.dispute(1, 1001).unwrap();
+    /// assert_eq!(txs.get(1), Some(&Account::new(dec!(10), dec!(20), false)));
+    ///
+    /// txs.resolve(1, 1001).unwrap();
+    /// assert_eq!(txs.get(1), Some(&Account::new(dec!(30), dec!(0), false)));
+    /// ```
     pub fn resolve(&mut self, cid: Cid, txid: Txid) -> Result<(), Error> {
         self.process_tx(Tx::resolve(cid, txid))
     }
 
-    /// Processes an incoming charge back transaction.
+    /// Processes an incoming `ChargeBack` transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
+    ///
+    /// let mut txs = Txs::new();
+    ///
+    /// txs.deposit(1, 1001, dec!(20)).unwrap();
+    /// txs.deposit(1, 1002, dec!(10)).unwrap();
+    ///
+    /// txs.dispute(1, 1001).unwrap();
+    /// assert_eq!(txs.get(1), Some(&Account::new(dec!(10), dec!(20), false)));
+    ///
+    /// txs.charge_back(1, 1001).unwrap();
+    /// assert_eq!(txs.get(1), Some(&Account::new(dec!(10), dec!(0), true)));
+    /// ```
     pub fn charge_back(&mut self, cid: Cid, txid: Txid) -> Result<(), Error> {
         self.process_tx(Tx::charge_back(cid, txid))
     }
@@ -261,11 +394,12 @@ impl Txs {
     /// # Examples
     ///
     /// ```
-    /// use toy_payments_engine::*;
-    /// use rust_decimal_macros::*;
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::*;
     ///
     /// let mut txs = Txs::new();
-    /// assert_eq!(txs.process_tx(Tx::deposit(1, 1000, dec!(10))).unwrap(), () );
+    ///
+    /// txs.process_tx(Tx::deposit(1, 1000, dec!(10))).unwrap();
     /// assert_eq!(txs.get(1).unwrap().available, dec!(10) );
     /// ```
     pub fn process_tx(&mut self, tx: Tx) -> Result<(), Error> {
@@ -278,10 +412,14 @@ impl Txs {
             }
             (TxKind::Dispute, None) => self.with_tx(tx, |ref_tx, account| {
                 if !ref_tx.disputed {
-                    account.available -= ref_tx.amount.unwrap();
-                    account.held += ref_tx.amount.unwrap();
-                    ref_tx.disputed = true;
-                    Ok(())
+                    if ref_tx.kind == TxKind::Deposit {
+                        account.available -= ref_tx.amount.unwrap();
+                        account.held += ref_tx.amount.unwrap();
+                        ref_tx.disputed = true;
+                        Ok(())
+                    } else {
+                        Err(Error::TxMustBeDeposit)
+                    }
                 } else {
                     Err(Error::TxAlreadyDisputed)
                 }
@@ -322,7 +460,7 @@ impl Txs {
             if new_available < Decimal::ZERO {
                 Err(Error::InsuffienctFunds)
             } else if let Entry::Vacant(entry) = self.txs.entry(tx.txid) {
-                if let Some(_) = Decimal::checked_add(new_available, account.held) {
+                if Decimal::checked_add(new_available, account.held).is_some() {
                     entry.insert(tx);
                     account.available = new_available;
                     Ok(())
@@ -345,7 +483,7 @@ impl Txs {
         let account = self.accounts.entry(tx.cid).or_default();
         self.txs
             .get_mut(&tx.txid)
-            .ok_or_else(|| Error::TxNotFound)
+            .ok_or(Error::TxNotFound)
             .and_then(|ref_tx| {
                 if ref_tx.cid == tx.cid {
                     op(ref_tx, account)
@@ -361,62 +499,7 @@ mod tests {
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
-    use crate::{Account, Error, Tx, Txs};
-
-    #[test]
-    fn test_withdrawal() {
-        let mut txs = Txs::new();
-        txs.deposit(1, 1001, dec!(15.005)).unwrap();
-        txs.deposit(1, 1002, dec!(24.996)).unwrap();
-
-        txs.deposit(2, 1003, dec!(10)).unwrap();
-
-        assert_eq!(txs.get(1).unwrap().available, dec!(40.001));
-        assert_eq!(txs.get(2).unwrap().available, dec!(10));
-
-        txs.withdrawal(1, 1004, dec!(10.002)).unwrap();
-        txs.withdrawal(2, 1005, dec!(10)).unwrap();
-
-        assert_eq!(txs.get(1).unwrap().available, dec!(29.999));
-        assert_eq!(txs.get(2).unwrap().available, dec!(0));
-    }
-
-    #[test]
-    fn test_withdrawal_insuffient_funds() {
-        let mut txs = Txs::new();
-        assert_eq!(
-            txs.withdrawal(1, 1002, dec!(1)).unwrap_err(),
-            Error::InsuffienctFunds
-        );
-    }
-
-    #[test]
-    fn test_deposit_same_tx() {
-        let mut txs = Txs::new();
-        txs.process_tx(Tx::deposit(1, 1001, dec!(10))).unwrap();
-
-        assert_eq!(
-            txs.process_tx(Tx::deposit(1, 1001, dec!(10))).unwrap_err(),
-            Error::TxAlreadyExists
-        );
-        assert_eq!(
-            txs.process_tx(Tx::deposit(2, 1001, dec!(10))).unwrap_err(),
-            Error::TxAlreadyExists
-        );
-    }
-
-    #[test]
-    fn test_dispute() {
-        let mut txs = Txs::new();
-        txs.deposit(1, 1001, dec!(20)).unwrap();
-        txs.deposit(1, 1002, dec!(10)).unwrap();
-        txs.dispute(1, 1001).unwrap();
-
-        assert_eq!(
-            txs.get(1).unwrap(),
-            &Account::new(dec!(10), dec!(20), false)
-        );
-    }
+    use crate::{Error, Txs};
 
     #[test]
     fn test_tx_not_found() {
@@ -437,20 +520,6 @@ mod tests {
     }
 
     #[test]
-    fn test_double_dispute() {
-        let mut txs = Txs::new();
-        txs.deposit(1, 1001, dec!(20)).unwrap();
-        txs.deposit(1, 1002, dec!(10)).unwrap();
-        txs.dispute(1, 1001).unwrap();
-        assert_eq!(txs.dispute(1, 1001).unwrap_err(), Error::TxAlreadyDisputed);
-
-        assert_eq!(
-            txs.get(1).unwrap(),
-            &Account::new(dec!(10), dec!(20), false)
-        );
-    }
-
-    #[test]
     fn test_tx_not_disputed() {
         let mut txs = Txs::new();
         txs.deposit(1, 1001, dec!(20)).unwrap();
@@ -464,6 +533,6 @@ mod tests {
         txs.deposit(1, 1001, Decimal::MAX).unwrap();
         txs.dispute(1, 1001).unwrap();
 
-        assert_eq!(txs.deposit(1, 1002, dec!(1)).unwrap_err(), Error::MathError);
+        assert_eq!(txs.deposit(1, 1002, dec!(1)), Err(Error::MathError));
     }
 }
