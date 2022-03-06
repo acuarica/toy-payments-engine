@@ -14,6 +14,22 @@ type Txid = u32;
 
 type Cid = u16;
 
+#[derive(Debug, PartialEq, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+/// Represents the kind of transactions that can be processed.
+pub enum TxKind {
+    /// A client's deposit into an account.
+    Deposit,
+    /// A client's withdrawal into an account.
+    Withdrawal,
+    /// A dispute represents a client's claim that a transaction was erroneous and should be reversed.
+    Dispute,
+    /// A resolve represents a resolution to a dispute, releasing the associated held funds.
+    Resolve,
+    /// A chargeback is the final state of a dispute and represents the client reversing a transaction.
+    ChargeBack,
+}
+
 /// Represents an incoming transaction.
 #[derive(Debug, Deserialize)]
 pub struct Tx {
@@ -299,22 +315,6 @@ impl Txs {
             Err(Error::MathError)
         }
     }
-}
-
-#[derive(Debug, PartialEq, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-/// Represents the kind of transactions that can be processed.
-pub enum TxKind {
-    /// A client's deposit into an account.
-    Deposit,
-    /// A client's withdrawal into an account.
-    Withdrawal,
-    /// A dispute represents a client's claim that a transaction was erroneous and should be reversed.
-    Dispute,
-    /// A resolve represents a resolution to a dispute, releasing the associated held funds.
-    Resolve,
-    /// A chargeback is the final state of a dispute and represents the client reversing a transaction.
-    ChargeBack,
 }
 
 #[cfg(test)]
