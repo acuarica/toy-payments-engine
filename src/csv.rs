@@ -40,9 +40,10 @@ pub fn parse_transactions<P: AsRef<Path>>(path: P) -> Result<Txs, Box<dyn error:
 /// let mut txs = Txs::new();
 /// let mut buf = vec![];
 ///
-/// txs.deposit_tx(1, 1001, dec!(10.05));
-/// txs.withdrawal_tx(1, 1002, dec!(1));
-/// txs.deposit_tx(2, 1003, dec!(5));
+/// txs.deposit_tx(1, 1001, dec!(10.05)).unwrap();
+/// txs.withdrawal_tx(1, 1002, dec!(1)).unwrap();
+/// txs.deposit_tx(2, 1003, dec!(5)).unwrap();
+///
 /// write_transactions(&txs, BufWriter::new(&mut buf)).unwrap();
 ///
 /// assert_eq!(

@@ -22,6 +22,8 @@ pub enum Error {
     MathError,
     /// When the transaction ID was already processed.
     TxAlreadyExists,
+    /// When the transaction ID was not found.
+    TxNotFound,
     /// Then transaction is not well formed.
     InvalidTx,
 }
@@ -84,7 +86,7 @@ impl Txs {
                     account.held += operation_tx.amount.unwrap();
                     Ok(())
                 } else {
-                    Err(Error::TxAlreadyExists)
+                    Err(Error::TxNotFound)
                 }
             }
             (TxKind::Resolve, None) => {
@@ -111,6 +113,11 @@ impl Txs {
         self.process_tx(Tx::withdrawal(cid, txid, amount))
     }
 
+    /// Processed an incoming `dispute` transaction.
+    pub fn dispute(&mut self, cid: Cid, txid: Txid) -> Result<(), Error> {
+        self.process_tx(Tx::dispute(cid, txid))
+    }
+
     fn process_operation<F: FnOnce(Decimal, Decimal) -> Option<Decimal>>(
         txs: &mut HashMap<Txid, Tx>,
         tx: Tx,
@@ -120,9 +127,13 @@ impl Txs {
     ) -> Result<(), Error> {
         if let Some(new_available) = operation(account.available, amount) {
             if let Entry::Vacant(entry) = txs.entry(tx.txid) {
-                entry.insert(tx);
-                account.available = new_available;
-                Ok(())
+                if let Some(_) = Decimal::checked_add(new_available, account.held) {
+                    entry.insert(tx);
+                    account.available = new_available;
+                    Ok(())
+                } else {
+                    Err(Error::MathError)
+                }
             } else {
                 Err(Error::TxAlreadyExists)
             }
@@ -193,6 +204,18 @@ impl Tx {
             cid,
             txid,
             amount: Some(amount),
+        }
+    }
+
+    /// Creates a new incoming dispute transaction.
+    /// Please note that this type of transaction does not take an amount.
+    /// The amount is taken from the corresponding `txid`.
+    pub fn dispute(cid: Cid, txid: Txid) -> Self {
+        Self {
+            kind: TxKind::Dispute,
+            cid,
+            txid,
+            amount: None,
         }
     }
 }
@@ -295,6 +318,18 @@ mod tests {
         assert_eq!(
             txs.process_tx(Tx::deposit(2, 1001, dec!(10))).unwrap_err(),
             Error::TxAlreadyExists
+        );
+    }
+
+    #[test]
+    fn test_total_overflow_when_deposit() {
+        let mut txs = Txs::new();
+        txs.deposit_tx(1, 1001, Decimal::MAX).unwrap();
+        txs.dispute(1, 1001).unwrap();
+
+        assert_eq!(
+            txs.deposit_tx(1, 1002, dec!(1)).unwrap_err(),
+            Error::MathError
         );
     }
 }
