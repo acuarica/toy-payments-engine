@@ -8,7 +8,6 @@ pub mod csv;
 use std::collections::{hash_map::Entry, HashMap};
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use serde::Deserialize;
 
 type Txid = u32;
@@ -26,6 +25,8 @@ pub struct Tx {
     #[serde(rename = "tx")]
     txid: Txid,
     amount: Option<Decimal>,
+    #[serde(skip_deserializing)]
+    disputed: bool,
 }
 
 impl Tx {
@@ -43,6 +44,7 @@ impl Tx {
             cid,
             txid,
             amount: Some(amount),
+            disputed: false,
         }
     }
 
@@ -60,6 +62,7 @@ impl Tx {
             cid,
             txid,
             amount: Some(amount),
+            disputed: false,
         }
     }
 
@@ -72,12 +75,39 @@ impl Tx {
             cid,
             txid,
             amount: None,
+            disputed: false,
+        }
+    }
+
+    /// Creates a new incoming resolve transaction.
+    /// Please note that this type of transaction does not take an amount.
+    /// The amount is taken from the corresponding `txid`.
+    pub fn resolve(cid: Cid, txid: Txid) -> Self {
+        Self {
+            kind: TxKind::Resolve,
+            cid,
+            txid,
+            amount: None,
+            disputed: false,
+        }
+    }
+
+    /// Creates a new incoming chargeback transaction.
+    /// Please note that this type of transaction does not take an amount.
+    /// The amount is taken from the corresponding `txid`.
+    pub fn charge_back(cid: Cid, txid: Txid) -> Self {
+        Self {
+            kind: TxKind::ChargeBack,
+            cid,
+            txid,
+            amount: None,
+            disputed: false,
         }
     }
 }
 
 /// Represents the state of a given client's account.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Account {
     /// The funds that are available for trading, staking, withdrawal, _etc_.
     pub available: Decimal,
@@ -89,11 +119,12 @@ pub struct Account {
 }
 
 impl Account {
-    fn new() -> Self {
+    /// Creates a new account.
+    pub fn new(available: Decimal, held: Decimal, locked: bool) -> Self {
         Self {
-            available: dec!(0),
-            held: dec!(0),
-            locked: false,
+            available,
+            held,
+            locked,
         }
     }
 }
@@ -101,13 +132,19 @@ impl Account {
 #[derive(Debug, PartialEq)]
 /// Represents the kind of errors returned by `Txs::process_tx`.
 pub enum Error {
-    /// When an overflow or underflow error happens.
+    /// Occurs when an overflow or underflow error happens.
     MathError,
-    /// When the transaction ID was already processed.
+    /// Occurs when the transaction ID was already processed.
     TxAlreadyExists,
-    /// When the transaction ID was not found.
+    /// Occurs when the transaction ID was not found.
     TxNotFound,
-    /// Then transaction is not well formed.
+    /// Occurs when two TXs have a different Client ID.
+    CidMismatch,
+    /// Occurs when a TX is being disputed a second time.
+    TxAlreadyDisputed,
+    /// Occurs when a TX is not being disputed.
+    TxNotDisputed,
+    /// When transaction is not well formed.
     InvalidTx,
 }
 
@@ -141,6 +178,31 @@ impl Txs {
         self.accounts.get(&cid)
     }
 
+    /// Processes an incoming deposit transaction.
+    pub fn deposit_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
+        self.process_tx(Tx::deposit(cid, txid, amount))
+    }
+
+    /// Processes an incoming withdrawal transaction.
+    pub fn withdrawal_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
+        self.process_tx(Tx::withdrawal(cid, txid, amount))
+    }
+
+    /// Processes an incoming dispute transaction.
+    pub fn dispute(&mut self, cid: Cid, txid: Txid) -> Result<(), Error> {
+        self.process_tx(Tx::dispute(cid, txid))
+    }
+
+    /// Processes an incoming resolve transaction.
+    pub fn resolve(&mut self, cid: Cid, txid: Txid) -> Result<(), Error> {
+        self.process_tx(Tx::resolve(cid, txid))
+    }
+
+    /// Processes an incoming charge back transaction.
+    pub fn charge_back(&mut self, cid: Cid, txid: Txid) -> Result<(), Error> {
+        self.process_tx(Tx::charge_back(cid, txid))
+    }
+
     /// Process a transaction.
     ///
     /// # Examples
@@ -154,8 +216,7 @@ impl Txs {
     /// assert_eq!(txs.get(1).unwrap().available, dec!(10) );
     /// ```
     pub fn process_tx(&mut self, tx: Tx) -> Result<(), Error> {
-        let account = self.accounts.entry(tx.cid).or_insert(Account::new());
-
+        let account = self.accounts.entry(tx.cid).or_default();
         match (tx.kind, tx.amount) {
             (TxKind::Deposit, Some(amount)) => {
                 Txs::process_operation(&mut self.txs, tx, account, amount, Decimal::checked_add)
@@ -163,42 +224,56 @@ impl Txs {
             (TxKind::Withdrawal, Some(amount)) => {
                 Txs::process_operation(&mut self.txs, tx, account, amount, Decimal::checked_sub)
             }
-            (TxKind::Dispute, None) => {
-                if let Some(operation_tx) = self.txs.get(&tx.txid) {
-                    account.available -= operation_tx.amount.unwrap();
-                    account.held += operation_tx.amount.unwrap();
+            (TxKind::Dispute, None) => self.with_tx(tx, |ref_tx, account| {
+                if !ref_tx.disputed {
+                    account.available -= ref_tx.amount.unwrap();
+                    account.held += ref_tx.amount.unwrap();
+                    ref_tx.disputed = true;
                     Ok(())
                 } else {
-                    Err(Error::TxNotFound)
+                    Err(Error::TxAlreadyDisputed)
                 }
-            }
-            (TxKind::Resolve, None) => {
-                if let Some(operation_tx) = self.txs.get(&tx.txid) {
-                    account.available += operation_tx.amount.unwrap();
-                    account.held -= operation_tx.amount.unwrap();
+            }),
+            (TxKind::Resolve, None) => self.with_tx(tx, |ref_tx, account| {
+                if ref_tx.disputed {
+                    account.available += ref_tx.amount.unwrap();
+                    account.held -= ref_tx.amount.unwrap();
+                    ref_tx.disputed = false;
                     Ok(())
                 } else {
-                    Err(Error::TxAlreadyExists)
+                    Err(Error::TxNotDisputed)
                 }
-            }
-            (TxKind::ChargeBack, None) => Ok(()),
+            }),
+            (TxKind::ChargeBack, None) => self.with_tx(tx, |ref_tx, account| {
+                if ref_tx.disputed {
+                    account.held -= ref_tx.amount.unwrap();
+                    account.locked = true;
+                    ref_tx.disputed = false;
+                    Ok(())
+                } else {
+                    Err(Error::TxNotDisputed)
+                }
+            }),
             _ => Err(Error::InvalidTx),
         }
     }
 
-    /// Processes an incoming `deposit` transaction.
-    pub fn deposit_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
-        self.process_tx(Tx::deposit(cid, txid, amount))
-    }
-
-    /// Processes an incoming `withdrawal` transaction.
-    pub fn withdrawal_tx(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
-        self.process_tx(Tx::withdrawal(cid, txid, amount))
-    }
-
-    /// Processed an incoming `dispute` transaction.
-    pub fn dispute(&mut self, cid: Cid, txid: Txid) -> Result<(), Error> {
-        self.process_tx(Tx::dispute(cid, txid))
+    fn with_tx<F: FnOnce(&mut Tx, &mut Account) -> Result<(), Error>>(
+        &mut self,
+        tx: Tx,
+        op: F,
+    ) -> Result<(), Error> {
+        let account = self.accounts.entry(tx.cid).or_default();
+        self.txs
+            .get_mut(&tx.txid)
+            .ok_or_else(|| Error::TxNotFound)
+            .and_then(|ref_tx| {
+                if ref_tx.cid == tx.cid {
+                    op(ref_tx, account)
+                } else {
+                    Err(Error::CidMismatch)
+                }
+            })
     }
 
     fn process_operation<F: FnOnce(Decimal, Decimal) -> Option<Decimal>>(
@@ -247,7 +322,7 @@ mod tests {
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
-    use crate::{Error, Tx, Txs};
+    use crate::{Account, Error, Tx, Txs};
 
     #[test]
     fn test_deposit() {
@@ -319,6 +394,59 @@ mod tests {
             txs.process_tx(Tx::deposit(2, 1001, dec!(10))).unwrap_err(),
             Error::TxAlreadyExists
         );
+    }
+
+    #[test]
+    fn test_dispute() {
+        let mut txs = Txs::new();
+        txs.deposit_tx(1, 1001, dec!(20)).unwrap();
+        txs.deposit_tx(1, 1002, dec!(10)).unwrap();
+        txs.dispute(1, 1001).unwrap();
+
+        assert_eq!(
+            txs.get(1).unwrap(),
+            &Account::new(dec!(10), dec!(20), false)
+        );
+    }
+
+    #[test]
+    fn test_tx_not_found() {
+        let mut txs = Txs::new();
+        assert_eq!(txs.dispute(1, 1001).unwrap_err(), Error::TxNotFound);
+        assert_eq!(txs.resolve(1, 1001).unwrap_err(), Error::TxNotFound);
+        assert_eq!(txs.charge_back(1, 1001).unwrap_err(), Error::TxNotFound);
+    }
+
+    #[test]
+    fn test_cid_mismatch() {
+        let mut txs = Txs::new();
+        txs.deposit_tx(1, 1001, dec!(10)).unwrap();
+
+        assert_eq!(txs.dispute(2, 1001).unwrap_err(), Error::CidMismatch);
+        assert_eq!(txs.resolve(2, 1001).unwrap_err(), Error::CidMismatch);
+        assert_eq!(txs.charge_back(2, 1001).unwrap_err(), Error::CidMismatch);
+    }
+
+    #[test]
+    fn test_double_dispute() {
+        let mut txs = Txs::new();
+        txs.deposit_tx(1, 1001, dec!(20)).unwrap();
+        txs.deposit_tx(1, 1002, dec!(10)).unwrap();
+        txs.dispute(1, 1001).unwrap();
+        assert_eq!(txs.dispute(1, 1001).unwrap_err(), Error::TxAlreadyDisputed);
+
+        assert_eq!(
+            txs.get(1).unwrap(),
+            &Account::new(dec!(10), dec!(20), false)
+        );
+    }
+
+    #[test]
+    fn test_tx_not_disputed() {
+        let mut txs = Txs::new();
+        txs.deposit_tx(1, 1001, dec!(20)).unwrap();
+        assert_eq!(txs.resolve(1, 1001).unwrap_err(), Error::TxNotDisputed);
+        assert_eq!(txs.charge_back(1, 1001).unwrap_err(), Error::TxNotDisputed);
     }
 
     #[test]

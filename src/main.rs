@@ -1,12 +1,13 @@
-use std::{env, error::Error, io, process};
+use std::{env, error::Error, fs::File, io, process};
 
-use toy_payments_engine::{csv::parse_transactions, csv::write_transactions};
+use toy_payments_engine::csv::{process_transactions, write_transactions};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() == 2 {
-        let txs = parse_transactions(&args[1])?;
+        let file = File::open(&args[1])?;
+        let txs = process_transactions(file)?;
         write_transactions(&txs, io::stdout())
     } else {
         eprintln!(

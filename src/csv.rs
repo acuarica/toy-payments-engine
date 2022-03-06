@@ -3,22 +3,49 @@
 
 #![warn(missing_docs)]
 
-use std::{error, io, path::Path};
+use std::{error, io};
 
 use csv::{ReaderBuilder, Trim};
+use log::warn;
 
 use crate::{Tx, Txs};
 
 /// Parses and processes incoming transactions from a file.
-pub fn parse_transactions<P: AsRef<Path>>(path: P) -> Result<Txs, Box<dyn error::Error>> {
+///
+/// # Examples
+///
+/// ```
+/// use toy_payments_engine::csv::*;
+///
+/// let data = "\
+/// type, client, tx, amount
+/// deposit, 1, 1, 1.0
+/// deposit, 2, 2, 2.0
+/// deposit, 1, 3, 2.0
+/// withdrawal, 1, 4, 1.5
+/// withdrawal, 2, 5, 3.0
+/// dispute, 1, 1
+/// resolve, 1, 1
+/// dispute, 1, 1
+/// chargeback, 1, 1
+/// ";
+///
+/// let txs = process_transactions(data.as_bytes()).unwrap();
+/// ```
+pub fn process_transactions<R: io::Read>(rdr: R) -> Result<Txs, Box<dyn error::Error>> {
     let mut reader = ReaderBuilder::new()
         .trim(Trim::All)
         .flexible(true)
-        .from_path(path)?;
+        .from_reader(rdr);
     let mut txs = Txs::new();
+    let mut lineno = 1;
     for result in reader.deserialize() {
         let tx: Tx = result?;
-        txs.process_tx(tx).unwrap();
+        match txs.process_tx(tx) {
+            Err(err) => warn!("Warning in line {}: {:?}", lineno, err),
+            _ => {}
+        }
+        lineno += 1;
     }
 
     Ok(txs)
@@ -42,14 +69,12 @@ pub fn parse_transactions<P: AsRef<Path>>(path: P) -> Result<Txs, Box<dyn error:
 ///
 /// txs.deposit_tx(1, 1001, dec!(10.05)).unwrap();
 /// txs.withdrawal_tx(1, 1002, dec!(1)).unwrap();
-/// txs.deposit_tx(2, 1003, dec!(5)).unwrap();
 ///
 /// write_transactions(&txs, BufWriter::new(&mut buf)).unwrap();
 ///
 /// assert_eq!(
 ///     std::str::from_utf8(&buf).unwrap(),
 ///     "client,available,held,total,locked
-/// 2,5,0,5,false
 /// 1,9.05,0,9.05,false
 /// "
 /// );
@@ -79,9 +104,39 @@ mod tests {
 
     use std::io::BufWriter;
 
-    use crate::Txs;
+    use rust_decimal_macros::dec;
 
-    use super::write_transactions;
+    use crate::{Account, Txs};
+
+    use super::{process_transactions, write_transactions};
+
+    #[test]
+    fn test_process_transactions_with_errors() {
+        let data = "\
+type, client, tx, amount
+deposit, 1, 1, 1.0
+deposit, 2, 2, 7.0
+deposit, 1, 3, 2.0
+withdrawal, 1, 4, 1.5
+withdrawal, 2, 5, 3.0
+dispute, 1, 1
+dispute, 1, 1
+resolve, 1, 1
+resolve, 1, 1
+dispute, 2, 2
+chargeback, 2, 2
+";
+
+        let txs = process_transactions(data.as_bytes()).unwrap();
+        assert_eq!(
+            txs.accounts.get(&1).unwrap(),
+            &Account::new(dec!(1.5), dec!(0), false)
+        );
+        assert_eq!(
+            txs.accounts.get(&2).unwrap(),
+            &Account::new(dec!(-3), dec!(0), true)
+        );
+    }
 
     #[test]
     fn test_write_empty_transactions() {
