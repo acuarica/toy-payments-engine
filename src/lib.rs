@@ -148,6 +148,8 @@ impl Account {
 #[derive(Debug, PartialEq)]
 /// Represents the kind of errors returned by `Txs::process_tx`.
 pub enum Error {
+    /// Occurs when the amount is either ZERO or a negative value.
+    InvalidAmount,
     /// Occurs when an overflow or underflow error happens.
     MathError,
     /// Insufficient available funds for this operation.
@@ -207,21 +209,19 @@ impl Txs {
     }
 
     /// Processes an incoming `Deposit` transaction.
+    /// 
+    /// The amount must be a positive value.
     ///
     /// # Examples
     ///
     /// ```
-    /// use toy_payments_engine::*;
-    /// use rust_decimal_macros::dec;
-    ///
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
     /// let mut txs = Txs::new();
     /// txs.deposit(1, 1001, dec!(15.005)).unwrap();
     /// txs.deposit(1, 1002, dec!(24.996)).unwrap();
-    ///
     /// txs.deposit(2, 1003, dec!(30)).unwrap();
-    ///
     /// txs.deposit(3, 1004, dec!(5)).unwrap();
-    ///
     /// txs.deposit(1, 1005, dec!(5.2)).unwrap();
     ///
     /// assert_eq!(txs.get(1).unwrap().available, dec!(45.201));
@@ -229,13 +229,22 @@ impl Txs {
     /// assert_eq!(txs.get(3).unwrap().available, dec!(5));
     /// ```
     ///
+    /// The deposit fails if the amount to deposit is not positive.
+    /// 
+    /// ```
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
+    /// let mut txs = Txs::new();
+    /// assert_eq!(txs.deposit(1, 1001, dec!(0)), Err(Error::InvalidAmount));
+    /// assert_eq!(txs.deposit(2, 1001, dec!(-10)), Err(Error::InvalidAmount));
+    /// ```
+    /// 
     /// The same transaction id cannot be used twice,
     /// even if the client ID if different.
     ///
     /// ```
-    /// use toy_payments_engine::*;
-    /// use rust_decimal_macros::dec;
-    ///
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal_macros::dec;
     /// let mut txs = Txs::new();
     /// txs.deposit(1, 1001, dec!(10)).unwrap();
     ///
@@ -246,12 +255,12 @@ impl Txs {
     /// The transaction processing fails when the `available` amount in the account overflows.
     ///
     /// ```
-    /// use toy_payments_engine::*;
-    /// use rust_decimal_macros::dec;
-    ///
+    /// # use toy_payments_engine::*;
+    /// # use rust_decimal::Decimal;
+    /// # use rust_decimal_macros::dec;
     /// let mut txs = Txs::new();
-    /// txs.deposit(1, 1001, rust_decimal::Decimal::MAX).unwrap();
-    ///
+    /// txs.deposit(1, 1001, Decimal::MAX).unwrap();
+    /// 
     /// assert_eq!(txs.deposit(1, 1002, dec!(1)), Err(Error::MathError));
     /// ```
     pub fn deposit(&mut self, cid: Cid, txid: Txid, amount: Decimal) -> Result<(), Error> {
@@ -259,6 +268,7 @@ impl Txs {
     }
 
     /// Processes an incoming `Withdrawal` transaction.
+    /// The amount must be a positive value.
     ///
     /// # Examples
     ///
@@ -464,6 +474,10 @@ impl Txs {
         amount: Decimal,
         checked_op: F,
     ) -> Result<(), Error> {
+        if amount <= Decimal::ZERO {
+            return Err(Error::InvalidAmount);
+        }
+
         let account = self.accounts.entry(tx.cid).or_default();
 
         if let Some(new_available) = checked_op(account.available, amount) {
