@@ -8,7 +8,7 @@ fn bin() -> Command {
 }
 
 #[test]
-fn test_usage_no_args() {
+fn usage_with_no_args() {
     bin()
         .assert()
         .failure()
@@ -16,7 +16,7 @@ fn test_usage_no_args() {
 }
 
 #[test]
-fn test_usage_multiple_args() {
+fn usage_with_multiple_args() {
     bin()
         .arg("foobar")
         .arg("test/file/doesnt/exist")
@@ -26,7 +26,7 @@ fn test_usage_multiple_args() {
 }
 
 #[test]
-fn test_path_doesnt_exist() {
+fn path_doesnt_exist() {
     bin()
         .arg("file/path/doesnt/exist")
         .assert()
@@ -35,7 +35,7 @@ fn test_path_doesnt_exist() {
 }
 
 #[test]
-fn test_path_exist() {
+fn path_exist() {
     bin()
         .arg("./input-example.csv")
         .assert()
